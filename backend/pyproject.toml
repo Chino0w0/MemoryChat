@@ -1,0 +1,9 @@
+[project]
+name = "memorychat-backend"
+version = "0.1.0"
+description = "MemoryChat personal memory chat backend with Plan A small-model linkage"
+requires-python = ">=3.11"
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]

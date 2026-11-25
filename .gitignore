@@ -1,0 +1,29 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+backend/.venv/
+.pytest_cache/
+*.egg-info/
+
+# Local SQLite & runtime artifacts
+backend/data/
+*.db
+*.db-shm
+*.db-wal
+*.joblib
+
+# Node / Frontend
+node_modules/
+frontend/node_modules/
+frontend/dist/
+dist/
+.vite/
+
+# OS & IDE
+.DS_Store
+Thumbs.db
+.env
+.env.local

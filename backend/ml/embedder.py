@@ -26,9 +26,9 @@ def _extract_tokens(text: str) -> set[str]:
 
 
 class MemoryEmbedder:
-    """Plan A Small Model #2: 512-d semantic embedder (bge-small-zh-v1.5 with deterministic local fallback)."""
+    """Plan A Small Model #2: 512-d semantic embedder (bge-small-zh-v1.5 with deterministic local hashing fallback)."""
 
-    def __init__(self, use_bge_if_cached: bool = False):
+    def __init__(self, use_bge_if_cached: bool = True):
         self._bge_model = None
         if use_bge_if_cached:
             try:
@@ -47,10 +47,8 @@ class MemoryEmbedder:
 
         if self._bge_model is not None:
             payload = f"{BGE_QUERY_PREFIX}{cleaned}" if is_query else cleaned
-            arr = np.asarray(self._bge_model.encode(payload, normalize_embeddings=True), dtype=np.float32)
-            return arr
+            return np.asarray(self._bge_model.encode(payload, normalize_embeddings=True), dtype=np.float32)
 
-        # Fast deterministic 512-d signed feature hashing over char 1-3 grams + ASCII tokens
         norm = cleaned.lower()
         features: list[tuple[str, float]] = []
         for token in re.findall(r"[a-z0-9_+#.-]{2,}", norm):

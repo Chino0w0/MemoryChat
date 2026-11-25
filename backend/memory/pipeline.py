@@ -2,19 +2,19 @@ from __future__ import annotations
 
 from typing import Any
 
-from app.db.repository import Repository
-from app.llm.provider import MultiProviderClient
-from app.ml.embedder import MemoryEmbedder
-from app.ml.memory_gate import MemoryGateClassifier
+from db.repository import Repository
+from llm.provider import MultiProviderClient
+from ml.embedder import MemoryEmbedder
+from ml.memory_gate import MemoryGateClassifier
 
 BASE_SYSTEM_PROMPT = (
-    "你是 MemoryChat 个人助手。请自然结合下方已知的用户画像与相关记忆回答，回答保持简洁直接；"
-    "若某条记忆与当前问题无关，请忽略它。"
+    "你是 MemoryChat 个人 AI 助手。请自然结合下方已知的用户画像与相关记忆来回答问题；"
+    "若某条记忆与当前问题无关，请直接忽略。"
 )
 
 
 class MemoryPipeline:
-    """Coordinates pre-turn memory recall and post-turn Plan A small-model extraction + rolling summary."""
+    """Orchestrates pre-turn layered recall and post-turn MemoryGate filtering + summary compression."""
 
     def __init__(
         self,
@@ -22,7 +22,7 @@ class MemoryPipeline:
         gate: MemoryGateClassifier,
         embedder: MemoryEmbedder,
         llm: MultiProviderClient,
-        summary_trigger_count: int = 8,
+        summary_trigger_count: int = 10,
     ):
         self.repo = repo
         self.gate = gate
@@ -36,7 +36,7 @@ class MemoryPipeline:
         query: str,
         memory_enabled: bool = True,
         top_k: int = 5,
-        threshold: float = 0.15,
+        threshold: float = 0.20,
     ) -> tuple[str, list[dict[str, Any]]]:
         if not memory_enabled:
             return BASE_SYSTEM_PROMPT, []
@@ -45,10 +45,9 @@ class MemoryPipeline:
         pinned_profiles = [m for m in injectable if m["layer"] == "profile" or m["is_pinned"]]
         retrieved = self.embedder.retrieve(query=query, memories=injectable, top_k=top_k, threshold=threshold)
 
-        # Merge retrieved hits + active profile items without duplicates
         seen_ids: set[str] = set()
         referenced: list[dict[str, Any]] = []
-        for item in retrieved + pinned_profiles[:5]:
+        for item in retrieved + pinned_profiles[:6]:
             if item["id"] not in seen_ids:
                 seen_ids.add(item["id"])
                 clean_item = {k: v for k, v in item.items() if k != "embedding_blob"}
@@ -87,7 +86,7 @@ class MemoryPipeline:
             return None
 
         existing = self.repo.list_memories(active_only=True, include_blob=True)
-        similar = self.embedder.retrieve(query=user_text, memories=existing, top_k=3, threshold=0.12)
+        similar = self.embedder.retrieve(query=user_text, memories=existing, top_k=3, threshold=0.10)
 
         decision = self.llm.extract_memory_decision(
             provider=provider,

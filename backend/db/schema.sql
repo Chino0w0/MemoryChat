@@ -14,8 +14,8 @@ CREATE TABLE IF NOT EXISTS model_providers (
 CREATE TABLE IF NOT EXISTS conversations (
     id TEXT PRIMARY KEY,
     title TEXT NOT NULL,
-    active_provider_id TEXT DEFAULT 'demo',
-    active_model TEXT DEFAULT 'memorychat-demo',
+    active_provider_id TEXT DEFAULT '',
+    active_model TEXT DEFAULT '',
     memory_enabled INTEGER DEFAULT 1,
     active_skills_json TEXT DEFAULT '[]',
     created_at TEXT NOT NULL,

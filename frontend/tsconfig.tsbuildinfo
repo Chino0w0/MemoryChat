@@ -1,1 +1,1 @@
-{"root":["./src/app.tsx","./src/api.ts","./src/main.tsx","./src/setuptests.ts","./src/types.ts","./src/__tests__/app.test.tsx","./src/components/chatstage.tsx","./src/components/memorydrawer.tsx","./src/components/providerdialog.tsx"],"version":"5.9.3"}
+{"root":["./src/app.tsx","./src/api.ts","./src/main.tsx","./src/setuptests.ts","./src/types.ts","./src/__tests__/app.test.tsx","./src/components/chatarea.tsx","./src/components/memorydrawer.tsx","./src/components/modelsettings.tsx","./src/components/sidebar.tsx","./src/store/usechatstore.ts"],"version":"5.9.3"}

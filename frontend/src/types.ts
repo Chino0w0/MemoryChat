@@ -1,14 +1,5 @@
 export type MemoryLayer = 'profile' | 'episodic';
 
-export interface ProviderPreset {
-  id: string;
-  name: string;
-  badge: string;
-  base_url: string;
-  models: string[];
-  requires_key: boolean;
-}
-
 export interface ModelProvider {
   id: string;
   name: string;
@@ -24,6 +15,7 @@ export interface Conversation {
   active_provider_id: string;
   active_model: string;
   memory_enabled: boolean;
+  active_skills: string[];
   created_at: string;
   updated_at: string;
 }
@@ -68,9 +60,7 @@ export interface SessionSummary {
   updated_at: string;
 }
 
-export interface ExtensionSlot {
-  slot: 'asr' | 'skill' | 'tool';
-  label: string;
-  status: 'reserved' | 'active';
-  count?: number;
+export interface SkillMeta {
+  name: string;
+  description: string;
 }

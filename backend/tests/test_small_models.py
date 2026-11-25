@@ -1,20 +1,19 @@
 import numpy as np
 from pathlib import Path
-from app.ml.memory_gate import MemoryGateClassifier
-from app.ml.embedder import MemoryEmbedder
+from ml.memory_gate import MemoryGateClassifier
+from ml.embedder import MemoryEmbedder
 
 
 def test_memory_gate_three_class_predictions(tmp_path: Path):
     gate = MemoryGateClassifier()
 
-    skip_res = gate.predict("哈哈哈好的谢谢，帮我写一段冒泡排序代码")
-    assert skip_res.label == "skip"
+    assert gate.predict("哈哈哈好的谢谢，帮我写一段快速排序代码").label == "skip"
 
-    profile_res = gate.predict("我是大四计算机专业学生，平时写Python后端偏爱用FastAPI")
+    profile_res = gate.predict("我是计算机专业学生，平时写Python后端偏爱用FastAPI")
     assert profile_res.label == "profile"
     assert profile_res.confidence >= 0.45
 
-    episodic_res = gate.predict("下周五之前我要提交综合实习课设报告，这几天都在赶进度")
+    episodic_res = gate.predict("下周五之前我要提交综合实习报告，这几天都在赶进度")
     assert episodic_res.label == "episodic"
     assert episodic_res.confidence >= 0.45
 
@@ -25,7 +24,7 @@ def test_memory_gate_three_class_predictions(tmp_path: Path):
 
 
 def test_embedder_blob_roundtrip_and_hybrid_retrieval():
-    embedder = MemoryEmbedder()
+    embedder = MemoryEmbedder(use_bge_if_cached=False)
     vec = embedder.encode("用户后端开发偏爱 FastAPI 框架")
     assert vec.shape == (512,)
     assert vec.dtype == np.float32
@@ -33,8 +32,7 @@ def test_embedder_blob_roundtrip_and_hybrid_retrieval():
 
     blob = embedder.to_blob(vec)
     assert len(blob) == 2048
-    restored = embedder.from_blob(blob)
-    assert np.allclose(vec, restored)
+    assert np.allclose(vec, embedder.from_blob(blob))
 
     memories = [
         {
@@ -69,12 +67,7 @@ def test_embedder_blob_roundtrip_and_hybrid_retrieval():
         },
     ]
 
-    hits = embedder.retrieve(
-        query="帮我用 FastAPI 写一个后端接口",
-        memories=memories,
-        top_k=2,
-        threshold=0.15,
-    )
+    hits = embedder.retrieve(query="帮我用 FastAPI 写一个后端接口", memories=memories, top_k=2, threshold=0.15)
     hit_ids = [h["id"] for h in hits]
     assert "m_fastapi" in hit_ids
     assert "m_disabled" not in hit_ids

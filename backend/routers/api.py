@@ -1,36 +1,41 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
 from typing import Any, Iterator
 
-from fastapi import FastAPI, HTTPException
-from fastapi.middleware.cors import CORSMiddleware
+from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, field_validator
 
-from app.db.repository import Repository
-from app.extensions.interfaces import ExtensionRegistry
-from app.llm.provider import PRESET_PROVIDERS, MultiProviderClient
-from app.memory.pipeline import MemoryPipeline
-from app.ml.embedder import MemoryEmbedder
-from app.ml.memory_gate import MemoryGateClassifier
+from agent.runner import AgentRunner
+from agent.skills import SkillLoader
+from agent.tools import ToolRegistry
+from db.repository import Repository
+from llm.provider import MultiProviderClient
+from memory.pipeline import MemoryPipeline
+from ml.embedder import MemoryEmbedder
 
 
 class ProviderUpsertRequest(BaseModel):
-    id: str = Field(min_length=1, max_length=40)
-    name: str = Field(min_length=1, max_length=60)
-    base_url: str = Field(min_length=4, max_length=260)
+    id: str = Field(min_length=1, max_length=50)
+    name: str = Field(min_length=1, max_length=80)
+    base_url: str = Field(min_length=4, max_length=300)
     api_key: str = ""
     models: list[str] = Field(min_length=1)
     is_enabled: bool = True
 
 
+class ProviderTestRequest(BaseModel):
+    base_url: str = Field(min_length=4, max_length=300)
+    api_key: str = ""
+
+
 class ConversationCreateRequest(BaseModel):
     title: str = "新对话"
-    active_provider_id: str = "demo"
-    active_model: str = "memorychat-demo"
+    active_provider_id: str = ""
+    active_model: str = ""
     memory_enabled: bool = True
+    active_skills: list[str] = Field(default_factory=list)
 
 
 class ConversationPatchRequest(BaseModel):
@@ -38,6 +43,7 @@ class ConversationPatchRequest(BaseModel):
     active_provider_id: str | None = None
     active_model: str | None = None
     memory_enabled: bool | None = None
+    active_skills: list[str] | None = None
 
 
 class MemoryCreateRequest(BaseModel):
@@ -68,8 +74,9 @@ class ChatStreamRequest(BaseModel):
     provider_id: str | None = None
     model: str | None = None
     memory_enabled: bool | None = None
+    active_skills: list[str] | None = None
     top_k: int = Field(default=5, ge=1, le=10)
-    threshold: float = Field(default=0.15, ge=0.0, le=0.95)
+    threshold: float = Field(default=0.20, ge=0.0, le=0.95)
 
     @field_validator("content")
     @classmethod
@@ -83,89 +90,87 @@ def _sse_frame(event: str, data: dict[str, Any]) -> str:
     return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
 
 
-def create_app(db_path: str | Path | None = None) -> FastAPI:
-    default_db = Path(__file__).resolve().parents[1] / "data" / "memorychat.db"
-    repo = Repository(db_path or default_db)
-    repo.init_db()
+def build_api_router(
+    repo: Repository,
+    embedder: MemoryEmbedder,
+    llm: MultiProviderClient,
+    pipeline: MemoryPipeline,
+    runner: AgentRunner,
+    skills: SkillLoader,
+    tools: ToolRegistry,
+) -> APIRouter:
+    router = APIRouter(prefix="/api")
 
-    gate = MemoryGateClassifier()
-    embedder = MemoryEmbedder()
-    llm = MultiProviderClient()
-    pipeline = MemoryPipeline(repo=repo, gate=gate, embedder=embedder, llm=llm)
-    extensions = ExtensionRegistry()
-
-    app = FastAPI(title="MemoryChat API", version="1.0.0")
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=["*"],
-        allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
-    )
-
-    @app.get("/api/health")
+    @router.get("/health")
     def health() -> dict[str, Any]:
         return {"status": "ok", "version": "1.0.0"}
 
     # ---- Providers ----
-    @app.get("/api/providers/presets")
-    def list_presets() -> list[dict[str, Any]]:
-        return PRESET_PROVIDERS
-
-    @app.get("/api/providers")
+    @router.get("/providers")
     def list_providers() -> list[dict[str, Any]]:
         return repo.list_providers()
 
-    @app.post("/api/providers")
+    @router.post("/providers")
     def upsert_provider(req: ProviderUpsertRequest) -> dict[str, Any]:
+        cleaned_models = [m.strip() for m in req.models if m.strip()]
+        if not cleaned_models:
+            raise HTTPException(status_code=422, detail="At least one model ID is required")
         return repo.upsert_provider(
             provider_id=req.id.strip(),
             name=req.name.strip(),
             base_url=req.base_url.strip(),
-            models=[m.strip() for m in req.models if m.strip()],
+            models=cleaned_models,
             api_key=req.api_key.strip(),
             is_enabled=req.is_enabled,
         )
 
-    @app.delete("/api/providers/{provider_id}")
+    @router.post("/providers/test")
+    def test_provider(req: ProviderTestRequest) -> dict[str, Any]:
+        try:
+            return llm.test_connection(base_url=req.base_url.strip(), api_key=req.api_key.strip())
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @router.delete("/providers/{provider_id}")
     def delete_provider(provider_id: str) -> dict[str, bool]:
         return {"deleted": repo.delete_provider(provider_id)}
 
     # ---- Conversations ----
-    @app.get("/api/conversations")
+    @router.get("/conversations")
     def list_conversations() -> list[dict[str, Any]]:
         return repo.list_conversations()
 
-    @app.post("/api/conversations")
+    @router.post("/conversations")
     def create_conversation(req: ConversationCreateRequest) -> dict[str, Any]:
         return repo.create_conversation(
             title=req.title,
             active_provider_id=req.active_provider_id,
             active_model=req.active_model,
             memory_enabled=req.memory_enabled,
+            active_skills=req.active_skills,
         )
 
-    @app.patch("/api/conversations/{conv_id}")
+    @router.patch("/conversations/{conv_id}")
     def patch_conversation(conv_id: str, req: ConversationPatchRequest) -> dict[str, Any]:
         updated = repo.update_conversation(conv_id, **req.model_dump(exclude_none=True))
         if not updated:
             raise HTTPException(status_code=404, detail="Conversation not found")
         return updated
 
-    @app.delete("/api/conversations/{conv_id}")
+    @router.delete("/conversations/{conv_id}")
     def remove_conversation(conv_id: str) -> dict[str, bool]:
         return {"deleted": repo.delete_conversation(conv_id)}
 
-    @app.get("/api/conversations/{conv_id}/messages")
+    @router.get("/conversations/{conv_id}/messages")
     def list_messages(conv_id: str) -> list[dict[str, Any]]:
         return repo.list_messages(conv_id)
 
     # ---- Memories & Summaries ----
-    @app.get("/api/memories")
+    @router.get("/memories")
     def list_memories(layer: str | None = None) -> list[dict[str, Any]]:
         return repo.list_memories(layer=layer, active_only=True)
 
-    @app.post("/api/memories")
+    @router.post("/memories")
     def create_memory(req: MemoryCreateRequest) -> dict[str, Any]:
         layer = req.layer if req.layer in {"profile", "episodic"} else "profile"
         blob = embedder.to_blob(embedder.encode(req.content))
@@ -178,7 +183,7 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
             is_pinned=req.is_pinned or (layer == "profile"),
         )
 
-    @app.patch("/api/memories/{mem_id}")
+    @router.patch("/memories/{mem_id}")
     def patch_memory(mem_id: str, req: MemoryPatchRequest) -> dict[str, Any]:
         fields = req.model_dump(exclude_none=True)
         if "content" in fields:
@@ -189,48 +194,61 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
             raise HTTPException(status_code=404, detail="Memory not found")
         return updated
 
-    @app.delete("/api/memories/{mem_id}")
+    @router.delete("/memories/{mem_id}")
     def delete_memory(mem_id: str) -> dict[str, Any]:
         archived = repo.archive_memory(mem_id)
         if not archived:
             raise HTTPException(status_code=404, detail="Memory not found")
         return archived
 
-    @app.post("/api/memories/{mem_id}/undo")
+    @router.post("/memories/{mem_id}/undo")
     def undo_memory(mem_id: str) -> dict[str, Any]:
         archived = repo.archive_memory(mem_id, replaced_by_id=None)
         if not archived:
             raise HTTPException(status_code=404, detail="Memory not found")
         return archived
 
-    @app.get("/api/summaries")
+    @router.get("/summaries")
     def list_summaries() -> list[dict[str, Any]]:
         return repo.list_summaries()
 
-    # ---- Extension Slots ----
-    @app.get("/api/extensions/slots")
-    def list_extension_slots() -> list[dict[str, Any]]:
-        return extensions.list_slots()
+    # ---- Skills & Extension Info ----
+    @router.get("/skills")
+    def list_skills() -> list[dict[str, str]]:
+        return skills.list_skills()
 
-    # ---- Streaming Chat + Memory Linkage ----
-    @app.post("/api/chat/stream")
+    @router.get("/tools")
+    def list_tools() -> list[dict[str, Any]]:
+        return tools.list_schemas()
+
+    # ---- Streaming Chat ----
+    @router.post("/chat/stream")
     def chat_stream(req: ChatStreamRequest) -> StreamingResponse:
         conv = repo.get_conversation(req.conversation_id)
         if not conv:
             raise HTTPException(status_code=404, detail="Conversation not found")
 
-        provider_id = req.provider_id or conv["active_provider_id"] or "demo"
-        provider = repo.get_provider(provider_id) or repo.get_provider("demo")
+        provider_id = req.provider_id or conv["active_provider_id"]
+        if not provider_id:
+            providers = repo.list_providers()
+            if not providers:
+                raise HTTPException(status_code=400, detail="尚未配置任何模型服务商，请先在模型服务设置中添加接口。")
+            provider_id = providers[0]["id"]
+
+        provider = repo.get_provider(provider_id)
         if not provider:
-            raise HTTPException(status_code=404, detail="Provider not found")
+            raise HTTPException(status_code=404, detail=f"Provider '{provider_id}' not found")
 
-        model = req.model or conv["active_model"] or (provider["models"][0] if provider["models"] else "memorychat-demo")
+        model = req.model or conv["active_model"] or (provider["models"][0] if provider["models"] else "")
+        if not model:
+            raise HTTPException(status_code=400, detail="未指定可用模型 ID")
+
         mem_enabled = req.memory_enabled if req.memory_enabled is not None else conv["memory_enabled"]
+        active_skills = req.active_skills if req.active_skills is not None else conv["active_skills"]
 
-        # Auto-title new conversations concisely from the first user prompt
-        history = repo.list_messages(conv["id"])
-        if not history and conv["title"] == "新对话":
-            repo.update_conversation(conv["id"], title=req.content[:18])
+        history_rows = repo.list_messages(conv["id"])
+        if not history_rows and conv["title"] == "新对话":
+            repo.update_conversation(conv["id"], title=req.content[:20], active_provider_id=provider_id, active_model=model)
 
         sys_prompt, refs = pipeline.prepare_context(
             conversation_id=conv["id"],
@@ -240,27 +258,29 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
             threshold=req.threshold,
         )
 
-        user_msg = repo.add_message(
-            conversation_id=conv["id"],
-            role="user",
-            content=req.content,
-        )
-
-        llm_messages = [{"role": "system", "content": sys_prompt}]
-        for m in history[-10:]:
-            if m["role"] in {"user", "assistant"}:
-                llm_messages.append({"role": m["role"], "content": m["content"]})
-        llm_messages.append({"role": "user", "content": req.content})
+        user_msg = repo.add_message(conversation_id=conv["id"], role="user", content=req.content)
+        clean_history = [
+            {"role": m["role"], "content": m["content"]}
+            for m in history_rows[-10:]
+            if m["role"] in {"user", "assistant"}
+        ]
 
         def event_stream() -> Iterator[str]:
             yield _sse_frame("memory_context", {"items": refs})
             collected: list[str] = []
             try:
-                for delta in llm.stream_chat(provider=provider, model=model, messages=llm_messages):
+                for delta in runner.stream_turn(
+                    provider=provider,
+                    model=model,
+                    system_prompt=sys_prompt,
+                    history=clean_history,
+                    user_content=req.content,
+                    active_skills=active_skills,
+                ):
                     collected.append(delta)
                     yield _sse_frame("text_delta", {"delta": delta})
             except Exception as exc:
-                err_msg = f"模型请求失败（{exc}）"
+                err_msg = f"调用模型接口失败：{exc}"
                 collected.append(err_msg)
                 yield _sse_frame("text_delta", {"delta": err_msg})
 
@@ -288,7 +308,4 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
 
         return StreamingResponse(event_stream(), media_type="text/event-stream")
 
-    return app
-
-
-app = create_app()
+    return router

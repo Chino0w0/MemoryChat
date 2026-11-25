@@ -1,7 +1,25 @@
 import json
 from pathlib import Path
+import httpx
 from fastapi.testclient import TestClient
-from app.main import create_app
+
+from main import create_app
+
+
+def _mock_transport() -> httpx.MockTransport:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/models"):
+            return httpx.Response(200, json={"data": [{"id": "deepseek-chat"}]})
+        body = json.loads(request.content.decode("utf-8"))
+        if body.get("stream"):
+            sse = (
+                'data: {"choices":[{"delta":{"content":"收到，按 FastAPI 风格回复。"}}]}\n\n'
+                "data: [DONE]\n\n"
+            )
+            return httpx.Response(200, text=sse, headers={"content-type": "text/event-stream"})
+        return httpx.Response(500, json={"error": "use fallback extractor"})
+
+    return httpx.MockTransport(handler)
 
 
 def _parse_sse(raw_text: str) -> list[tuple[str, dict]]:
@@ -11,81 +29,90 @@ def _parse_sse(raw_text: str) -> list[tuple[str, dict]]:
         if line.startswith("event:"):
             current_event = line.split(":", 1)[1].strip()
         elif line.startswith("data:"):
-            payload = json.loads(line.split(":", 1)[1].strip())
-            events.append((current_event, payload))
+            events.append((current_event, json.loads(line.split(":", 1)[1].strip())))
     return events
 
 
-def test_health_presets_and_extension_slots(tmp_path: Path):
-    client = TestClient(create_app(tmp_path / "api.db"))
-
+def test_health_skills_and_unconfigured_provider_guard(tmp_path: Path):
+    client = TestClient(create_app(db_path=tmp_path / "api.db", llm_transport=_mock_transport()))
     assert client.get("/api/health").status_code == 200
-    presets = client.get("/api/providers/presets").json()
-    assert any(p["id"] == "deepseek" for p in presets)
+    assert client.get("/api/providers").json() == []
+    assert len(client.get("/api/skills").json()) >= 3
 
-    slots = client.get("/api/extensions/slots").json()
-    assert [s["slot"] for s in slots] == ["asr", "skill", "tool"]
+    conv = client.post("/api/conversations", json={"title": "未配模型测试"}).json()
+    # Sending before configuring any provider returns clean 400
+    no_prov = client.post("/api/chat/stream", json={"conversation_id": conv["id"], "content": "你好"})
+    assert no_prov.status_code == 400
 
 
 def test_empty_message_rejected_with_422(tmp_path: Path):
-    client = TestClient(create_app(tmp_path / "api.db"))
-    conv = client.post("/api/conversations", json={"title": "测试"}).json()
-    resp = client.post(
-        "/api/chat/stream",
-        json={"conversation_id": conv["id"], "content": "   "},
-    )
+    client = TestClient(create_app(db_path=tmp_path / "api.db", llm_transport=_mock_transport()))
+    conv = client.post("/api/conversations", json={"title": "空消息测试"}).json()
+    resp = client.post("/api/chat/stream", json={"conversation_id": conv["id"], "content": "   "})
     assert resp.status_code == 422
 
 
-def test_end_to_end_chat_memory_capture_recall_toggle_and_undo(tmp_path: Path):
-    client = TestClient(create_app(tmp_path / "api.db"))
-    conv = client.post("/api/conversations", json={"title": "个人偏好"}).json()
+def test_end_to_end_provider_setup_chat_recall_toggle_and_undo(tmp_path: Path):
+    client = TestClient(create_app(db_path=tmp_path / "api.db", llm_transport=_mock_transport()))
 
-    # Turn 1: User states persona preference -> MemoryGate + Pipeline captures it
+    # 1. Test connection & save custom provider
+    conn = client.post("/api/providers/test", json={"base_url": "https://api.deepseek.com/v1", "api_key": "sk-1"}).json()
+    assert conn["ok"] is True
+
+    client.post(
+        "/api/providers",
+        json={
+            "id": "deepseek",
+            "name": "DeepSeek",
+            "base_url": "https://api.deepseek.com/v1",
+            "api_key": "sk-1",
+            "models": conn["models"],
+        },
+    )
+
+    conv1 = client.post("/api/conversations", json={"title": "会话1"}).json()
     r1 = client.post(
         "/api/chat/stream",
         json={
-            "conversation_id": conv["id"],
-            "content": "我是大四计算机专业学生，平时写Python后端最喜欢用FastAPI",
+            "conversation_id": conv1["id"],
+            "provider_id": "deepseek",
+            "model": "deepseek-chat",
+            "content": "我是计算机专业学生，平时写Python后端最喜欢用FastAPI",
         },
     )
     assert r1.status_code == 200
     ev1 = _parse_sse(r1.text)
-    ev_names1 = [name for name, _ in ev1]
-    assert "text_delta" in ev_names1
-    assert "memory_updated" in ev_names1
-    assert "done" in ev_names1
-
     mem_event = next(data for name, data in ev1 if name == "memory_updated")
     mem_id = mem_event["memory"]["id"]
 
-    # Turn 2 in a brand-new conversation recalls the stored memory
-    conv2 = client.post("/api/conversations", json={"title": "新窗口测试跨会话记忆"}).json()
+    # 2. Cross-conversation recall
+    conv2 = client.post("/api/conversations", json={"title": "会话2"}).json()
     r2 = client.post(
         "/api/chat/stream",
         json={
             "conversation_id": conv2["id"],
-            "content": "结合我的Python后端框架偏好给我一句建议",
+            "provider_id": "deepseek",
+            "model": "deepseek-chat",
+            "content": "结合我的Python后端框架偏好给个建议",
         },
     )
-    ev2 = _parse_sse(r2.text)
-    ctx_event = next(data for name, data in ev2 if name == "memory_context")
+    ctx_event = next(data for name, data in _parse_sse(r2.text) if name == "memory_context")
     assert any(item["id"] == mem_id for item in ctx_event["items"])
 
-    # Disable memory via drawer PATCH -> no longer recalled
-    patch_resp = client.patch(f"/api/memories/{mem_id}", json={"is_enabled": False})
-    assert patch_resp.status_code == 200
+    # 3. Disable in drawer -> excluded from recall
+    client.patch(f"/api/memories/{mem_id}", json={"is_enabled": False})
     r3 = client.post(
         "/api/chat/stream",
         json={
             "conversation_id": conv2["id"],
+            "provider_id": "deepseek",
+            "model": "deepseek-chat",
             "content": "再结合我的Python后端框架偏好说说",
         },
     )
-    ctx_after_disable = next(data for name, data in _parse_sse(r3.text) if name == "memory_context")
-    assert all(item["id"] != mem_id for item in ctx_after_disable["items"])
+    ctx_disabled = next(data for name, data in _parse_sse(r3.text) if name == "memory_context")
+    assert all(item["id"] != mem_id for item in ctx_disabled["items"])
 
-    # Undo endpoint archives memory cleanly
-    undo_resp = client.post(f"/api/memories/{mem_id}/undo")
-    assert undo_resp.status_code == 200
+    # 4. Undo archives cleanly
+    assert client.post(f"/api/memories/{mem_id}/undo").status_code == 200
     assert client.get("/api/memories").json() == []

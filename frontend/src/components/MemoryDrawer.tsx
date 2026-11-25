@@ -1,252 +1,166 @@
 import { useState } from 'react';
-import {
-  Coffee,
-  Code2,
-  Eye,
-  EyeOff,
-  FileText,
-  GraduationCap,
-  Pin,
-  Plus,
-  Puzzle,
-  SlidersHorizontal,
-  Target,
-  Trash2,
-  UserRound,
-  X,
-} from 'lucide-react';
-import type { MemoryItem, MemoryLayer, SessionSummary } from '../types';
+import { Pin, X } from 'lucide-react';
+import { useChatStore } from '../store/useChatStore';
 
-interface Props {
-  memories: MemoryItem[];
-  summaries: SessionSummary[];
-  topK: number;
-  threshold: number;
-  onChangeTopK: (val: number) => void;
-  onChangeThreshold: (val: number) => void;
-  onAddMemory: (layer: MemoryLayer, category: string, content: string) => Promise<void>;
-  onToggleEnable: (mem: MemoryItem) => Promise<void>;
-  onTogglePin: (mem: MemoryItem) => Promise<void>;
-  onArchive: (memId: string) => Promise<void>;
-  onClose: () => void;
-}
-
-const CATEGORY_CHIPS = [
-  { id: 'identity', label: '身份', icon: GraduationCap, layer: 'profile' as MemoryLayer },
-  { id: 'preference', label: '偏好', icon: Code2, layer: 'profile' as MemoryLayer },
-  { id: 'habit', label: '习惯', icon: Coffee, layer: 'episodic' as MemoryLayer },
-  { id: 'project', label: '近期', icon: Target, layer: 'episodic' as MemoryLayer },
-];
-
-export function MemoryDrawer({
-  memories,
-  summaries,
-  topK,
-  threshold,
-  onChangeTopK,
-  onChangeThreshold,
-  onAddMemory,
-  onToggleEnable,
-  onTogglePin,
-  onArchive,
-  onClose,
-}: Props) {
+export function MemoryDrawer() {
   const [tab, setTab] = useState<'profile' | 'episodic' | 'summary'>('profile');
-  const [selectedCat, setSelectedCat] = useState(CATEGORY_CHIPS[1]);
   const [draft, setDraft] = useState('');
+
+  const {
+    drawerOpen,
+    memories,
+    summaries,
+    topK,
+    threshold,
+    setDrawerOpen,
+    setTopK,
+    setThreshold,
+    addMemory,
+    toggleMemoryEnable,
+    toggleMemoryPin,
+    archiveMemory,
+  } = useChatStore();
+
+  if (!drawerOpen) return null;
 
   const filtered = memories.filter((m) => (tab === 'profile' ? m.layer === 'profile' : m.layer === 'episodic'));
 
-  const handleQuickAdd = async (e: React.FormEvent) => {
+  const submitAdd = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!draft.trim()) return;
-    await onAddMemory(tab === 'episodic' ? 'episodic' : selectedCat.layer, selectedCat.id, draft.trim());
+    await addMemory(tab === 'episodic' ? 'episodic' : 'profile', draft.trim());
     setDraft('');
   };
 
   return (
-    <aside className="drawer" aria-label="个人记忆抽屉">
-      {/* Header + Segmented Icon Tabs */}
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-        <div style={{ display: 'flex', gap: 6 }}>
-          <button
-            type="button"
-            className={`icon-btn ${tab === 'profile' ? 'memory-active' : ''}`}
-            onClick={() => setTab('profile')}
-            aria-label="画像层"
-          >
-            <UserRound size={14} aria-hidden="true" />
-            画像
-          </button>
-          <button
-            type="button"
-            className={`icon-btn ${tab === 'episodic' ? 'memory-active' : ''}`}
-            onClick={() => setTab('episodic')}
-            aria-label="情景记忆层"
-          >
-            <Puzzle size={14} aria-hidden="true" />
-            记忆
-          </button>
-          <button
-            type="button"
-            className={`icon-btn ${tab === 'summary' ? 'memory-active' : ''}`}
-            onClick={() => setTab('summary')}
-            aria-label="会话摘要层"
-          >
-            <FileText size={14} aria-hidden="true" />
-            摘要
-          </button>
-        </div>
-
+    <aside
+      aria-label="记忆与上下文面板"
+      className="w-[336px] shrink-0 border-l flex flex-col"
+      style={{ background: 'var(--mc-sidebar)', borderColor: 'var(--mc-border)' }}
+    >
+      <div
+        className="h-[52px] px-4 flex items-center justify-between border-b"
+        style={{ borderColor: 'var(--mc-border)' }}
+      >
+        <span className="text-sm font-semibold">记忆与上下文</span>
         <button
           type="button"
-          className="icon-btn"
-          style={{ padding: 6 }}
-          onClick={onClose}
-          aria-label="收起记忆抽屉"
+          onClick={() => setDrawerOpen(false)}
+          aria-label="关闭记忆面板"
+          className="w-7 h-7 rounded-lg flex items-center justify-center cursor-pointer"
+          style={{ color: 'var(--mc-fg-muted)' }}
         >
-          <X size={15} aria-hidden="true" />
+          <X size={16} strokeWidth={1.75} aria-hidden="true" />
         </button>
       </div>
 
-      {/* Category Icon Chips + 1-Line Quick Add */}
+      {/* Segmented Control */}
+      <div className="px-3 pt-3">
+        <div
+          className="grid grid-cols-3 p-0.5 rounded-lg border text-xs"
+          style={{ background: 'var(--mc-bg)', borderColor: 'var(--mc-border)' }}
+        >
+          {(['profile', 'episodic', 'summary'] as const).map((key) => {
+            const label = key === 'profile' ? '核心画像' : key === 'episodic' ? '情景记忆' : '会话摘要';
+            const active = tab === key;
+            return (
+              <button
+                key={key}
+                type="button"
+                onClick={() => setTab(key)}
+                className="py-1.5 rounded-md font-medium cursor-pointer transition-colors"
+                style={{
+                  background: active ? 'var(--mc-surface)' : 'transparent',
+                  color: active ? 'var(--mc-fg)' : 'var(--mc-fg-muted)',
+                }}
+              >
+                {label}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
       {tab !== 'summary' && (
-        <form onSubmit={handleQuickAdd} style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-          <div style={{ display: 'flex', gap: 6 }}>
-            {CATEGORY_CHIPS.map((c) => {
-              const Icon = c.icon;
-              const active = selectedCat.id === c.id;
-              return (
-                <button
-                  key={c.id}
-                  type="button"
-                  onClick={() => setSelectedCat(c)}
-                  className={`icon-btn ${active ? 'memory-active' : ''}`}
-                  style={{ padding: '4px 9px', fontSize: 12 }}
-                  aria-label={`分类 ${c.label}`}
-                >
-                  <Icon size={13} aria-hidden="true" />
-                  {c.label}
-                </button>
-              );
-            })}
-          </div>
-          <div style={{ display: 'flex', gap: 6 }}>
-            <input
-              value={draft}
-              onChange={(e) => setDraft(e.target.value)}
-              placeholder="+ 添加记忆..."
-              aria-label="快速添加记忆"
-              style={{
-                flex: 1,
-                borderRadius: 12,
-                border: '1px solid var(--border)',
-                background: 'var(--surface-muted)',
-                color: 'var(--fg)',
-                padding: '7px 10px',
-                fontSize: 13,
-                outline: 'none',
-              }}
-            />
-            <button type="submit" className="icon-btn primary" style={{ padding: '7px 10px' }} aria-label="确认添加">
-              <Plus size={15} aria-hidden="true" />
-            </button>
-          </div>
+        <form onSubmit={submitAdd} className="px-3 pt-2.5 flex items-center gap-1.5">
+          <input
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            placeholder="添加一条记忆条目..."
+            aria-label="手动添加记忆"
+            className="flex-1 h-8 px-2.5 rounded-lg border text-xs outline-none"
+            style={{ background: 'var(--mc-bg)', borderColor: 'var(--mc-border)' }}
+          />
+          <button
+            type="submit"
+            className="h-8 px-2.5 rounded-lg text-xs font-medium shrink-0 cursor-pointer"
+            style={{ background: 'var(--mc-primary)', color: 'var(--mc-primary-fg)' }}
+          >
+            添加
+          </button>
         </form>
       )}
 
-      {/* Memory / Summary Card List */}
-      <div className="scroller" style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 8 }}>
+      {/* List Body */}
+      <div className="flex-1 overflow-y-auto p-3 space-y-2 text-xs">
         {tab === 'summary' ? (
           summaries.length === 0 ? (
-            <div style={{ margin: 'auto', color: 'var(--fg-muted)', fontSize: 12 }}>∅</div>
+            <div className="py-14 text-center" style={{ color: 'var(--mc-fg-muted)' }}>
+              长对话满阈值后自动生成阶段摘要
+            </div>
           ) : (
             summaries.map((s) => (
               <div
                 key={s.id}
-                style={{
-                  padding: 10,
-                  borderRadius: 12,
-                  border: '1px solid var(--border)',
-                  background: 'var(--surface-muted)',
-                  fontSize: 12,
-                  lineHeight: 1.5,
-                }}
+                className="p-3 rounded-xl border leading-relaxed"
+                style={{ background: 'var(--mc-bg)', borderColor: 'var(--mc-border)' }}
               >
-                <div>{s.summary_text}</div>
-                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginTop: 6 }}>
-                  {s.key_topics.map((t) => (
-                    <span key={t} className="micro-badge recall" style={{ fontSize: 11, padding: '1px 7px' }}>
-                      #{t}
-                    </span>
-                  ))}
-                </div>
+                {s.summary_text}
               </div>
             ))
           )
         ) : filtered.length === 0 ? (
-          <div style={{ margin: 'auto', color: 'var(--fg-muted)', fontSize: 12 }}>∅</div>
+          <div className="py-14 text-center" style={{ color: 'var(--mc-fg-muted)' }}>
+            暂无记录
+          </div>
         ) : (
           filtered.map((m) => (
             <div
               key={m.id}
+              className="p-2.5 rounded-xl border flex items-start justify-between gap-2.5 transition-opacity"
               style={{
-                padding: '9px 10px',
-                borderRadius: 12,
-                border: '1px solid var(--border)',
-                background: m.is_enabled ? 'var(--surface-muted)' : 'transparent',
+                background: 'var(--mc-bg)',
+                borderColor: 'var(--mc-border)',
                 opacity: m.is_enabled ? 1 : 0.5,
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'space-between',
-                gap: 8,
               }}
             >
-              <span style={{ fontSize: 13, lineHeight: 1.4, wordBreak: 'break-word' }}>{m.content}</span>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 4, flexShrink: 0 }}>
+              <span className="leading-relaxed break-words flex-1">{m.content}</span>
+              <div className="flex items-center gap-1.5 shrink-0 pt-0.5">
                 <button
                   type="button"
-                  onClick={() => onTogglePin(m)}
-                  aria-label="置顶常驻"
-                  title="置顶"
-                  style={{
-                    border: 'none',
-                    background: 'transparent',
-                    color: m.is_pinned ? 'var(--brand)' : 'var(--fg-muted)',
-                    cursor: 'pointer',
-                    padding: 4,
-                  }}
+                  onClick={() => toggleMemoryPin(m)}
+                  aria-label="置顶记忆"
+                  className="w-6 h-6 rounded flex items-center justify-center cursor-pointer"
+                  style={{ color: m.is_pinned ? 'var(--mc-fg)' : 'var(--mc-fg-muted)' }}
                 >
-                  <Pin size={14} aria-hidden="true" />
+                  <Pin size={13} strokeWidth={1.75} aria-hidden="true" />
                 </button>
                 <button
                   type="button"
-                  onClick={() => onToggleEnable(m)}
-                  aria-label={m.is_enabled ? '暂停注入' : '恢复注入'}
-                  title={m.is_enabled ? '已启用' : '已暂停'}
-                  style={{
-                    border: 'none',
-                    background: 'transparent',
-                    color: m.is_enabled ? '#10b981' : 'var(--fg-muted)',
-                    cursor: 'pointer',
-                    padding: 4,
-                  }}
-                >
-                  {m.is_enabled ? <Eye size={14} aria-hidden="true" /> : <EyeOff size={14} aria-hidden="true" />}
-                </button>
+                  role="switch"
+                  aria-checked={m.is_enabled}
+                  aria-label={`切换记忆启用 ${m.content}`}
+                  onClick={() => toggleMemoryEnable(m)}
+                  className="mc-switch"
+                />
                 <button
                   type="button"
-                  onClick={() => onArchive(m.id)}
-                  aria-label="归档删除"
-                  style={{
-                    border: 'none',
-                    background: 'transparent',
-                    color: 'var(--fg-muted)',
-                    cursor: 'pointer',
-                    padding: 4,
-                  }}
+                  onClick={() => archiveMemory(m.id)}
+                  aria-label={`删除记忆 ${m.content}`}
+                  className="w-6 h-6 rounded flex items-center justify-center cursor-pointer"
+                  style={{ color: 'var(--mc-fg-muted)' }}
                 >
-                  <Trash2 size={14} aria-hidden="true" />
+                  <X size={13} strokeWidth={1.75} aria-hidden="true" />
                 </button>
               </div>
             </div>
@@ -254,42 +168,45 @@ export function MemoryDrawer({
         )}
       </div>
 
-      {/* Compact Retrieval Control Sliders */}
+      {/* Retrieval Tuning Sliders */}
       <div
-        style={{
-          borderTop: '1px solid var(--border)',
-          paddingTop: 10,
-          display: 'flex',
-          flexDirection: 'column',
-          gap: 6,
-          fontSize: 12,
-          color: 'var(--fg-muted)',
-        }}
+        className="p-3 border-t space-y-2 text-xs"
+        style={{ borderColor: 'var(--mc-border)', color: 'var(--mc-fg-muted)' }}
       >
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
-            <SlidersHorizontal size={13} aria-hidden="true" /> Top-{topK}
-          </span>
-          <input
-            type="range"
-            min={1}
-            max={10}
-            value={topK}
-            aria-label="单轮最大召回记忆条数"
-            onChange={(e) => onChangeTopK(Number(e.target.value))}
-          />
+        <div className="flex items-center justify-between">
+          <span>单轮最大召回</span>
+          <div className="flex items-center gap-2">
+            <input
+              type="range"
+              min={1}
+              max={10}
+              value={topK}
+              aria-label="单轮最大召回条数"
+              onChange={(e) => setTopK(Number(e.target.value))}
+              className="w-24"
+            />
+            <span className="w-4 text-right font-mono" style={{ color: 'var(--mc-fg)' }}>
+              {topK}
+            </span>
+          </div>
         </div>
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-          <span>🎯 {threshold.toFixed(2)}</span>
-          <input
-            type="range"
-            min={0.05}
-            max={0.8}
-            step={0.05}
-            value={threshold}
-            aria-label="语义相似度阈值"
-            onChange={(e) => onChangeThreshold(Number(e.target.value))}
-          />
+        <div className="flex items-center justify-between">
+          <span>语义相关度阈值</span>
+          <div className="flex items-center gap-2">
+            <input
+              type="range"
+              min={0.05}
+              max={0.8}
+              step={0.05}
+              value={threshold}
+              aria-label="语义相关度阈值"
+              onChange={(e) => setThreshold(Number(e.target.value))}
+              className="w-24"
+            />
+            <span className="w-8 text-right font-mono" style={{ color: 'var(--mc-fg)' }}>
+              {threshold.toFixed(2)}
+            </span>
+          </div>
         </div>
       </div>
     </aside>

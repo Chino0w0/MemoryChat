@@ -2,8 +2,6 @@ from __future__ import annotations
 
 """
 Standalone training & evaluation script for Plan A Small Model #1 (MemoryGate).
-Supports both Baidu DuLeMon JSONL files (placed under ml_experiments/data/)
-and the built-in bootstrap corpus for instant sanity verification.
 """
 
 import argparse
@@ -16,10 +14,10 @@ sys.path.insert(0, str(ROOT / "backend"))
 
 from sklearn.metrics import classification_report  # noqa: E402
 from sklearn.model_selection import train_test_split  # noqa: E402
-from app.ml.memory_gate import BOOTSTRAP_CORPUS, GateLabel, MemoryGateClassifier  # noqa: E402
+from ml.memory_gate import INITIAL_CORPUS, GateLabel, MemoryGateClassifier  # noqa: E402
 
 
-def load_dulemon_or_bootstrap(data_path: Path | None) -> tuple[list[str], list[GateLabel]]:
+def load_dataset(data_path: Path | None) -> tuple[list[str], list[GateLabel]]:
     if data_path and data_path.exists():
         texts: list[str] = []
         labels: list[GateLabel] = []
@@ -34,23 +32,17 @@ def load_dulemon_or_bootstrap(data_path: Path | None) -> tuple[list[str], list[G
                 labels.append(label)
         if texts:
             return texts, labels
-
-    texts_b, labels_b = zip(*BOOTSTRAP_CORPUS)
+    texts_b, labels_b = zip(*INITIAL_CORPUS)
     return list(texts_b), list(labels_b)
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Train and evaluate MemoryGate 3-class small model")
-    parser.add_argument("--data", type=Path, default=None, help="Optional JSONL dataset path (text, label)")
-    parser.add_argument(
-        "--out",
-        type=Path,
-        default=ROOT / "backend" / "data" / "memory_gate.joblib",
-        help="Output .joblib weight path",
-    )
+    parser = argparse.ArgumentParser(description="Train and evaluate MemoryGate 3-class classifier")
+    parser.add_argument("--data", type=Path, default=Path(__file__).parent / "data" / "dulemon_gate.jsonl")
+    parser.add_argument("--out", type=Path, default=ROOT / "backend" / "data" / "memory_gate.joblib")
     args = parser.parse_args()
 
-    texts, labels = load_dulemon_or_bootstrap(args.data)
+    texts, labels = load_dataset(args.data if args.data.exists() else None)
     x_train, x_test, y_train, y_test = train_test_split(
         texts, labels, test_size=0.25, random_state=42, stratify=labels
     )

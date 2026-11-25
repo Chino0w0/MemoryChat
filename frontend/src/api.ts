@@ -1,13 +1,12 @@
 import type {
   ChatMessage,
   Conversation,
-  ExtensionSlot,
   MemoryEvent,
   MemoryItem,
   MemoryLayer,
   ModelProvider,
-  ProviderPreset,
   SessionSummary,
+  SkillMeta,
 } from './types';
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
@@ -16,13 +15,13 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
     ...init,
   });
   if (!res.ok) {
-    throw new Error(`HTTP ${res.status}`);
+    const errBody = await res.json().catch(() => ({}));
+    throw new Error(errBody.detail || `HTTP ${res.status}`);
   }
   return res.json() as Promise<T>;
 }
 
 export const api = {
-  getPresets: () => request<ProviderPreset[]>('/api/providers/presets'),
   getProviders: () => request<ModelProvider[]>('/api/providers'),
   saveProvider: (payload: {
     id: string;
@@ -31,6 +30,12 @@ export const api = {
     api_key: string;
     models: string[];
   }) => request<ModelProvider>('/api/providers', { method: 'POST', body: JSON.stringify(payload) }),
+  testProvider: (payload: { base_url: string; api_key: string }) =>
+    request<{ ok: boolean; models: string[] }>('/api/providers/test', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  deleteProvider: (id: string) => request<{ deleted: boolean }>(`/api/providers/${id}`, { method: 'DELETE' }),
 
   getConversations: () => request<Conversation[]>('/api/conversations'),
   createConversation: (payload: Partial<Conversation> = {}) =>
@@ -50,7 +55,7 @@ export const api = {
   undoMemory: (id: string) => request<MemoryItem>(`/api/memories/${id}/undo`, { method: 'POST' }),
 
   getSummaries: () => request<SessionSummary[]>('/api/summaries'),
-  getExtensionSlots: () => request<ExtensionSlot[]>('/api/extensions/slots'),
+  getSkills: () => request<SkillMeta[]>('/api/skills'),
 
   async streamChat(
     params: {
@@ -75,7 +80,8 @@ export const api = {
       body: JSON.stringify(params),
     });
     if (!res.ok || !res.body) {
-      throw new Error(`Stream HTTP ${res.status}`);
+      const errBody = await res.json().catch(() => ({}));
+      throw new Error(errBody.detail || `Stream HTTP ${res.status}`);
     }
 
     const reader = res.body.getReader();

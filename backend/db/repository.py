@@ -13,7 +13,7 @@ def _utc_now() -> str:
 
 
 class Repository:
-    """Lightweight SQLite authority store for conversations, providers, and 3-layer memories."""
+    """SQLite persistence layer for providers, conversations, messages, memories, and summaries."""
 
     def __init__(self, db_path: str | Path):
         self.db_path = Path(db_path)
@@ -26,21 +26,11 @@ class Repository:
         return conn
 
     def init_db(self) -> None:
-        schema_path = Path(__file__).with_name("schema.sql")
-        schema_sql = schema_path.read_text(encoding="utf-8")
+        schema_sql = Path(__file__).with_name("schema.sql").read_text(encoding="utf-8")
         with self._connect() as conn:
             conn.executescript(schema_sql)
-            existing = conn.execute("SELECT id FROM model_providers WHERE id = 'demo'").fetchone()
-            if not existing:
-                conn.execute(
-                    """
-                    INSERT INTO model_providers (id, name, base_url, api_key, models_json, is_enabled, created_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?)
-                    """,
-                    ("demo", "Local Demo", "local://demo", "", json.dumps(["memorychat-demo"]), 1, _utc_now()),
-                )
 
-    # ---- Providers ----
+    # ---- Providers (Zero fake presets seeded) ----
     def list_providers(self) -> list[dict[str, Any]]:
         with self._connect() as conn:
             rows = conn.execute("SELECT * FROM model_providers ORDER BY created_at ASC").fetchall()
@@ -62,7 +52,10 @@ class Repository:
     ) -> dict[str, Any]:
         now = _utc_now()
         with self._connect() as conn:
-            prev = conn.execute("SELECT api_key, created_at FROM model_providers WHERE id = ?", (provider_id,)).fetchone()
+            prev = conn.execute(
+                "SELECT api_key, created_at FROM model_providers WHERE id = ?",
+                (provider_id,),
+            ).fetchone()
             final_key = api_key if api_key else (prev["api_key"] if prev else "")
             created_at = prev["created_at"] if prev else now
             conn.execute(
@@ -76,27 +69,25 @@ class Repository:
                     models_json = excluded.models_json,
                     is_enabled = excluded.is_enabled
                 """,
-                (provider_id, name, base_url, final_key, json.dumps(models), int(is_enabled), created_at),
+                (provider_id, name, base_url, final_key, json.dumps(models, ensure_ascii=False), int(is_enabled), created_at),
             )
             row = conn.execute("SELECT * FROM model_providers WHERE id = ?", (provider_id,)).fetchone()
         return self._format_provider(row)
 
     def delete_provider(self, provider_id: str) -> bool:
-        if provider_id == "demo":
-            return False
         with self._connect() as conn:
             cur = conn.execute("DELETE FROM model_providers WHERE id = ?", (provider_id,))
         return cur.rowcount > 0
 
     @staticmethod
     def _format_provider(row: sqlite3.Row, include_secret: bool = False) -> dict[str, Any]:
-        data = {
+        data: dict[str, Any] = {
             "id": row["id"],
             "name": row["name"],
             "base_url": row["base_url"],
             "models": json.loads(row["models_json"] or "[]"),
             "is_enabled": bool(row["is_enabled"]),
-            "has_key": bool(row["api_key"]) or row["base_url"].startswith("local://"),
+            "has_key": bool(row["api_key"]),
             "created_at": row["created_at"],
         }
         if include_secret:
@@ -107,19 +98,29 @@ class Repository:
     def create_conversation(
         self,
         title: str = "新对话",
-        active_provider_id: str = "demo",
-        active_model: str = "memorychat-demo",
+        active_provider_id: str = "",
+        active_model: str = "",
         memory_enabled: bool = True,
+        active_skills: list[str] | None = None,
     ) -> dict[str, Any]:
         conv_id = f"conv_{uuid.uuid4().hex[:10]}"
         now = _utc_now()
         with self._connect() as conn:
             conn.execute(
                 """
-                INSERT INTO conversations (id, title, active_provider_id, active_model, memory_enabled, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO conversations (id, title, active_provider_id, active_model, memory_enabled, active_skills_json, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 """,
-                (conv_id, title, active_provider_id, active_model, int(memory_enabled), now, now),
+                (
+                    conv_id,
+                    title,
+                    active_provider_id,
+                    active_model,
+                    int(memory_enabled),
+                    json.dumps(active_skills or [], ensure_ascii=False),
+                    now,
+                    now,
+                ),
             )
             row = conn.execute("SELECT * FROM conversations WHERE id = ?", (conv_id,)).fetchone()
         return self._format_conversation(row)
@@ -135,13 +136,20 @@ class Repository:
         return self._format_conversation(row) if row else None
 
     def update_conversation(self, conv_id: str, **fields: Any) -> dict[str, Any] | None:
-        allowed = {"title", "active_provider_id", "active_model", "memory_enabled"}
         updates: list[str] = []
         values: list[Any] = []
         for k, v in fields.items():
-            if k in allowed and v is not None:
+            if v is None:
+                continue
+            if k in {"title", "active_provider_id", "active_model"}:
                 updates.append(f"{k} = ?")
-                values.append(int(v) if k == "memory_enabled" else v)
+                values.append(v)
+            elif k == "memory_enabled":
+                updates.append("memory_enabled = ?")
+                values.append(int(v))
+            elif k == "active_skills":
+                updates.append("active_skills_json = ?")
+                values.append(json.dumps(v, ensure_ascii=False))
         if not updates:
             return self.get_conversation(conv_id)
         updates.append("updated_at = ?")
@@ -332,7 +340,6 @@ class Repository:
                 "UPDATE memories SET status = 'archived', replaced_by_id = ?, updated_at = ? WHERE id = ?",
                 (replaced_by_id, now, mem_id),
             )
-            # If undoing an UPDATE memory, restore any memory it superseded
             if replaced_by_id is None:
                 conn.execute(
                     "UPDATE memories SET status = 'active', replaced_by_id = NULL, updated_at = ? WHERE replaced_by_id = ?",

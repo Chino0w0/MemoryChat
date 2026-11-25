@@ -1,6 +1,5 @@
 import '@testing-library/jest-dom/vitest';
 
-// Polyfill HTMLDialogElement modal methods in jsdom
 if (typeof HTMLDialogElement !== 'undefined') {
   HTMLDialogElement.prototype.showModal = function showModal() {
     this.setAttribute('open', '');

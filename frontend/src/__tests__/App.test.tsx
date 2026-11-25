@@ -1,4 +1,4 @@
-import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import App from '../App';
 
@@ -13,41 +13,16 @@ function jsonResponse(data: unknown) {
   });
 }
 
-describe('MemoryChat Minimal-Text Graphical UI', () => {
+describe('MemoryChat Mainstream Chat UI (Zero Presets)', () => {
   beforeEach(() => {
     mockFetch.mockReset();
-    mockFetch.mockImplementation((url: string) => {
-      if (url.includes('/api/providers/presets')) {
-        return jsonResponse([
-          {
-            id: 'demo',
-            name: 'Local Demo',
-            badge: '⚡',
-            base_url: 'local://demo',
-            models: ['memorychat-demo'],
-            requires_key: false,
-          },
-          {
-            id: 'deepseek',
-            name: 'DeepSeek',
-            badge: '🐋',
-            base_url: 'https://api.deepseek.com/v1',
-            models: ['deepseek-chat', 'deepseek-reasoner'],
-            requires_key: true,
-          },
-        ]);
+    mockFetch.mockImplementation((url: string, init?: RequestInit) => {
+      if (url.includes('/api/providers') && init?.method === 'POST' && !url.includes('/test')) {
+        const body = JSON.parse(String(init.body));
+        return jsonResponse({ ...body, is_enabled: true, has_key: true });
       }
       if (url.includes('/api/providers')) {
-        return jsonResponse([
-          {
-            id: 'demo',
-            name: 'Local Demo',
-            base_url: 'local://demo',
-            models: ['memorychat-demo'],
-            is_enabled: true,
-            has_key: true,
-          },
-        ]);
+        return jsonResponse([]);
       }
       if (url.includes('/api/conversations') && !url.includes('/messages')) {
         return jsonResponse([]);
@@ -58,7 +33,7 @@ describe('MemoryChat Minimal-Text Graphical UI', () => {
             id: 'm1',
             layer: 'profile',
             category: 'preference',
-            content: '偏爱 FastAPI',
+            content: '接口风格偏好 FastAPI',
             confidence: 0.95,
             is_pinned: true,
             is_enabled: true,
@@ -67,47 +42,42 @@ describe('MemoryChat Minimal-Text Graphical UI', () => {
           },
         ]);
       }
-      if (url.includes('/api/extensions/slots')) {
-        return jsonResponse([
-          { slot: 'asr', label: 'ASR', status: 'reserved' },
-          { slot: 'skill', label: 'Skill', status: 'reserved' },
-          { slot: 'tool', label: 'Tool', status: 'reserved' },
-        ]);
+      if (url.includes('/api/summaries') || url.includes('/api/skills')) {
+        return jsonResponse([]);
       }
       return jsonResponse({});
     });
   });
 
-  it('renders visual starter cards, incognito toggle, memory drawer, and brand presets', async () => {
+  it('starts unconfigured with centered mainstream composer, toggles incognito & drawer, and saves custom provider', async () => {
     render(<App />);
 
-    // 3 graphical starter action buttons appear instead of instructional paragraphs
     await waitFor(() => {
-      expect(screen.getByTestId('starter-cards')).toBeInTheDocument();
+      expect(screen.getByText('有什么可以帮你？')).toBeInTheDocument();
     });
-    const starterGrid = screen.getByTestId('starter-cards');
-    expect(within(starterGrid).getAllByRole('button', { name: /录入画像|接入模型|试试记忆/i }).length).toBe(3);
+    // Starts cleanly with zero fake providers
+    expect(screen.getByText('未配置模型')).toBeInTheDocument();
 
-    // Incognito ghost button toggles aria-pressed
-    const incogBtn = screen.getByRole('button', { name: /无痕模式/i });
+    // Incognito toggle
+    const incogBtn = screen.getByRole('button', { name: /无痕对话开关/i });
     expect(incogBtn).toHaveAttribute('aria-pressed', 'false');
     fireEvent.click(incogBtn);
     expect(incogBtn).toHaveAttribute('aria-pressed', 'true');
 
-    // Memory badge button opens visual drawer showing stored memory card
-    const memBtn = screen.getByRole('button', { name: /记忆面板/i });
+    // Memory inspector drawer toggle
+    const memBtn = screen.getByRole('button', { name: /记忆面板开关/i });
     fireEvent.click(memBtn);
-    expect(await screen.findByText('偏爱 FastAPI')).toBeInTheDocument();
+    expect(await screen.findByText('接口风格偏好 FastAPI')).toBeInTheDocument();
 
-    // Provider modal opens and clicking DeepSeek preset card auto-populates Base URL
-    const modelBtn = screen.getByRole('button', { name: /切换或接入模型/i });
-    fireEvent.click(modelBtn);
-    const addProviderBtn = await screen.findByRole('button', { name: /管理模型供应商/i });
-    fireEvent.click(addProviderBtn);
+    // Clicking unconfigured model button opens custom provider modal
+    fireEvent.click(screen.getByRole('button', { name: /切换或配置模型/i }));
+    fireEvent.change(screen.getByLabelText(/服务商名称/i), { target: { value: 'DeepSeek' } });
+    fireEvent.change(screen.getByLabelText(/API 地址/i), { target: { value: 'https://api.deepseek.com/v1' } });
+    fireEvent.change(screen.getByLabelText(/可用模型 ID/i), { target: { value: 'deepseek-chat' } });
+    fireEvent.click(screen.getByRole('button', { name: /保存配置/i }));
 
-    const deepseekPreset = await screen.findByRole('button', { name: /选择预设 DeepSeek/i });
-    fireEvent.click(deepseekPreset);
-    const urlInput = screen.getByLabelText(/API 地址/i) as HTMLInputElement;
-    expect(urlInput.value).toBe('https://api.deepseek.com/v1');
+    await waitFor(() => {
+      expect(screen.getByText('deepseek-chat')).toBeInTheDocument();
+    });
   });
 });
